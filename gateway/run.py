@@ -9174,6 +9174,43 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             # command, not answer the clarify.  Leave the clarify pending
             # so the user can retry; if it times out, the agent unblocks
             # with an empty response.
+            if not _raw_clarify_reply.startswith("/"):
+                # Voice events carry the cached audio filename in ``text``.
+                # Run the same automatic-STT classification as the normal
+                # inbound path before resolving the pending clarify, and use
+                # only raw successful transcripts as the user's answer.
+                _clarify_audio_paths = []
+                for _i, _path in enumerate(event.media_urls or []):
+                    _mtype = _event_media_type_at(event, _i)
+                    if event.message_type == MessageType.VOICE or (
+                        _mtype.startswith("audio/")
+                        and event.message_type
+                        not in {MessageType.AUDIO, MessageType.DOCUMENT}
+                    ):
+                        _clarify_audio_paths.append(_path)
+
+                if _clarify_audio_paths:
+                    _, _clarify_transcripts = await self._enrich_message_with_transcription(
+                        "",
+                        _clarify_audio_paths,
+                    )
+                    _raw_clarify_reply = "\n\n".join(
+                        transcript.strip()
+                        for transcript in _clarify_transcripts
+                        if transcript.strip()
+                    ).strip()
+                    if not _raw_clarify_reply:
+                        logger.info(
+                            "Gateway could not transcribe clarify voice response; "
+                            "leaving prompt pending (session=%s, id=%s)",
+                            _quick_key,
+                            _pending_clarify.clarify_id,
+                        )
+                        return (
+                            "I couldn't transcribe that voice reply. "
+                            "Please reply again in text."
+                        )
+
             if _raw_clarify_reply and not _raw_clarify_reply.startswith("/"):
                 _resolved = _clarify_mod.resolve_text_response_for_session(
                     _quick_key, _raw_clarify_reply,
